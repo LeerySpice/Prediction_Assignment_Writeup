@@ -1,0 +1,175 @@
+---
+title: "Prediction_Assignment_Writeup"
+author: "Eduardo Jara Alfaro"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(dplyr)
+```
+
+## Overview
+
+The goal of this project is to predict the manner in which they did the exercise. This is the “classe” variable in the training set. This report describes how data was cleaned, how I split “pml-training.csv” into train set and test set, and some of models are investigated.
+
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: [http://groupware.les.inf.puc-rio.br/har]
+
+
+## Data Loading and Exploratory Analysis
+
+
+### Data load
+
+The next step is loading the dataset from the URL provided above. The training dataset is then partinioned in 2 to create a Training set (70% of the data) for the modeling process and a Test set (with the remaining 30%) for the validations. The testing dataset is not changed and will only be used for the quiz results generation.
+
+```{r load, echo=TRUE}
+
+if(!dir.exists("data")){
+  dir.create("data")
+}
+
+destfile = c("data/pml-traininig.csv", 
+             "data/pml-testing.csv")
+
+if(!file.exists(destfile)[1] | !file.exists(destfile)[2]){
+  TrainUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  TestUrl  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(TrainUrl, destfile = destfile[1], method = "curl")
+  download.file(TestUrl, destfile = destfile[2], method = "curl")
+}
+
+pml_df <- read.csv(destfile[1])
+pml_pred  <- read.csv(destfile[2])
+
+```
+
+### Data split
+
+Create data partition with caret library
+
+```{r split, echo=TRUE}
+set.seed(1234)
+inTrain  <- createDataPartition(pml_df$classe, p=0.7, list=FALSE)
+TrainSet <- pml_df[inTrain, ]
+TestSet  <- pml_df[-inTrain, ]
+dim(TrainSet); dim(TestSet)
+
+```
+
+### Data cleaning
+
+Let’s clean data. Firts, remove variables with high number to NAs
+
+```{r NAs, echo=TRUE}
+AllNA    <- sapply(TrainSet, function(x) mean(is.na(x))) > 0.95
+TrainSet <- TrainSet[, AllNA==FALSE]
+TestSet  <- TestSet[, AllNA==FALSE]
+```
+
+Now, remove variables with Nearly Zero Variance
+ 
+```{r NZV, echo=TRUE}
+NZV <- nearZeroVar(TrainSet)
+TrainSet <- TrainSet[, -NZV]
+TestSet  <- TestSet[, -NZV]
+```
+
+Finally, remove variables with IDs 
+
+```{r}
+TrainSet <- TrainSet[,-c(1:5)]
+TestSet <- TestSet[,-c(1:5)]
+dim(TrainSet); dim(TestSet)
+```
+
+## Prediction Model
+
+Three popular methods will be applied to model the regressions (in the Train dataset) and the best one (with higher accuracy when applied to the Test dataset) will be used for the quiz predictions. The methods are: Random Forests, Liner Discriminant Analysis, Decision Tree and Generalized Boosted Model. A Confusion Matrix is plotted at the end of each analysis to better visualize the accuracy of the models.
+
+In addition, a 5-fold (k-fold) cross-validation is considered: the k-fold cross-validation method consists of dividing the data set into k-subsets. For each subset it is maintained while the model is trained in all other subsets. It is a robust method to estimate the accuracy, and the size of k and adjust the amount of bias in the estimate.
+
+```{r traincontrol, echo=TRUE}
+trC=trainControl(method="cv", number=5)
+```
+
+
+### Random Forest
+
+```{r rf, echo=TRUE}
+set.seed(1234)
+model_RF <- train(classe ~ ., data=TrainSet, method="rf",
+                  trControl=trC)
+
+predict_RF <- predict(model_RF, TestSet)
+CM_RF <- confusionMatrix(predict_RF, TestSet$classe)
+CM_RF
+```
+
+### Liner Discriminant Analysis
+
+```{r lda, echo=TRUE }
+set.seed(1234)
+model_LDA <- train(classe ~ ., data = TrainSet, 
+                   method = "lda", trControl=trC, verboseIter=FALSE)
+predict_LDA <- predict(model_LDA, TestSet)
+CM_LDA <- confusionMatrix(predict_LDA, TestSet$classe)
+CM_LDA
+```
+
+### Decision Tree
+
+```{r rpart, echo=TRUE}
+set.seed(1234)
+model_rpart <- train(classe ~ ., data = TrainSet, 
+                     trControl = trC , method = "rpart")
+pred_rpart<- predict(model_rpart, TestSet)
+CM_rpart <- confusionMatrix(pred_rpart, TestSet$classe)
+CM_rpart
+```
+
+### Generalized Boosted Model (GBM)
+
+```{r GBM, echo=TRUE}
+set.seed(1234)
+model_GBM  <- train(classe ~ ., data=TrainSet, method = "gbm",
+                    trControl = trC,
+                    verbose = FALSE)
+
+predict_GBM <- predict(model_GBM, TestSet)
+CM_GBM <- confusionMatrix(predict_GBM, TestSet$classe)
+CM_GBM
+```
+
+
+## Apply model to test data
+
+Compare the accuracy in the models data.
+
+```{r summarymodels, echo=TRUE}
+
+SummaryModels <- cbind(CM_RF$overall[1], CM_LDA$overall[1],
+                       CM_rpart$overall[1], CM_GBM$overall[1])
+
+colnames(SummaryModels) <- c("RF", "LDA", "RPART","GBM")
+
+SummaryModels
+```
+
+Random Forest accuracy has the highest value 99.76 %
+
+Now we select the Random Forest model to predict based on the data set “pml-testing.csv”.
+
+```{r final, echo=TRUE}
+PredictTest <- predict(model_RF, pml_pred)
+
+filename = "Results.txt"
+write.table(PredictTest,file=filename,quote=FALSE,
+            row.names=FALSE,col.names=FALSE)
+```
+
+
